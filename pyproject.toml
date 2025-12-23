@@ -38,13 +38,13 @@ dev = [
 ]
 # OCR Engine CLIs - install individually based on needs
 deepseek = ["deepseek-ocr-cli>=0.1.0"]
-nougat = ["nougat-ocr>=0.1.17", "torch>=2.0.0"]
-# gemini = ["gemini-ocr-cli"]  # Not yet on PyPI - install manually for now
+nougat = ["nougat-ocr-cli>=0.1.0"]
+gemini = ["gemini-ocr-cli>=0.2.0"]
 mistral = ["mistral-ocr-cli>=0.1.0"]
 # Convenience groups
-local = ["deepseek-ocr-cli>=0.1.0", "nougat-ocr>=0.1.17", "torch>=2.0.0"]
-cloud = ["mistral-ocr-cli>=0.1.0"]  # Add gemini-ocr-cli manually once published
-all = ["deepseek-ocr-cli>=0.1.0", "nougat-ocr>=0.1.17", "torch>=2.0.0", "mistral-ocr-cli>=0.1.0"]
+local = ["deepseek-ocr-cli>=0.1.0", "nougat-ocr-cli>=0.1.0"]
+cloud = ["gemini-ocr-cli>=0.2.0", "mistral-ocr-cli>=0.1.0"]
+all = ["deepseek-ocr-cli>=0.1.0", "nougat-ocr-cli>=0.1.0", "gemini-ocr-cli>=0.2.0", "mistral-ocr-cli>=0.1.0"]
 
 [project.scripts]
 docr = "docr.cli:main"

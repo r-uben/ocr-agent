@@ -264,7 +264,7 @@ See `examples/kuttner_2001/` for a complete example with all 3 figures.
 | Engine | Installation | Type | Cost |
 |--------|-------------|------|------|
 | **DeepSeek** | `pip install deepseek-ocr-cli` | Local (Ollama) | Free |
-| **Nougat** | Included with docr | Local (Python) | Free |
+| **Nougat** | `pip install nougat-ocr-cli` | Local (Python) | Free |
 | **Gemini** | `pip install gemini-ocr-cli` | Cloud API | ~$0.0002/page |
 | **Mistral** | `pip install mistral-ocr-cli` | Cloud API | ~$0.001/page |
 
