@@ -7,7 +7,7 @@ from typing import Any
 
 from PIL import Image
 
-from ocr_cli.core.result import FigureResult, PageResult, PageStatus
+from docr.core.result import FigureResult, PageResult, PageStatus
 
 
 @dataclass

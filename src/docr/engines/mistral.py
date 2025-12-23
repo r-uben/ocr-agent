@@ -11,9 +11,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from ocr_cli.core.config import MistralConfig
-from ocr_cli.core.result import FigureResult, PageResult
-from ocr_cli.engines.base import BaseEngine, EngineCapabilities
+from docr.core.config import MistralConfig
+from docr.core.result import FigureResult, PageResult
+from docr.engines.base import BaseEngine, EngineCapabilities
 
 
 class MistralEngine(BaseEngine):

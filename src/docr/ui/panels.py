@@ -1,9 +1,9 @@
-"""Minimal panel components for OCR CLI."""
+"""Minimal panel components for docr."""
 
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from ocr_cli.ui.theme import ENGINE_LABELS, STATUS_ICONS
+from docr.ui.theme import ENGINE_LABELS, STATUS_ICONS
 
 
 class StagePanel:

@@ -10,9 +10,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from ocr_cli.core.config import NougatConfig
-from ocr_cli.core.result import PageResult, PageStatus
-from ocr_cli.engines.base import BaseEngine, EngineCapabilities
+from docr.core.config import NougatConfig
+from docr.core.result import PageResult, PageStatus
+from docr.engines.base import BaseEngine, EngineCapabilities
 
 
 class NougatEngine(BaseEngine):

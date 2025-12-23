@@ -1,4 +1,4 @@
-# OCR CLI
+# docr
 
 Multi-engine OCR with cascading fallback, quality audit, and figure extraction.
 
@@ -23,13 +23,13 @@ poetry install
 poetry install --extras cloud
 
 # Process a paper
-ocr process paper.pdf
+docr process paper.pdf
 
 # Process with figure images saved
-ocr process paper.pdf --save-figures
+docr process paper.pdf --save-figures
 
 # Batch process a folder
-ocr batch ~/Papers/ --limit 10
+docr batch ~/Papers/ --limit 10
 ```
 
 ## Example Output
@@ -37,7 +37,7 @@ ocr batch ~/Papers/ --limit 10
 Processing a 22-page economics paper:
 
 ```
-ocr v0.1.0
+docr v0.1.0
 
 kuttner_2001_monetary_policy.pdf
 22 pages, 1.2 MB
@@ -130,14 +130,14 @@ PDF -> Primary OCR -> Quality Audit -> Fallback OCR -> Figure Pass -> Output
 ollama pull deepseek-r1:8b
 
 # Check engine status
-ocr engines
+docr engines
 ```
 
 ## CLI Commands
 
 ```bash
 # Process single PDF
-ocr process paper.pdf [OPTIONS]
+docr process paper.pdf [OPTIONS]
   -o, --output PATH      Output file path
   -f, --format           markdown|json|txt
   --primary ENGINE       Force primary engine
@@ -147,20 +147,20 @@ ocr process paper.pdf [OPTIONS]
   --save-figures         Save figure images to disk
 
 # Batch process directory
-ocr batch ~/Papers/ [OPTIONS]
+docr batch ~/Papers/ [OPTIONS]
   --limit N              Process first N files
   --save-figures         Save all figure images
 
 # Check engines
-ocr engines
+docr engines
 
 # Check audit system
-ocr audit-status
+docr audit-status
 ```
 
 ## Configuration
 
-Create `ocr.yaml` in your project or home directory:
+Create `docr.yaml` in your project or home directory:
 
 ```yaml
 # Engine selection
@@ -189,7 +189,7 @@ output_format: markdown
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed module documentation.
 
 ```
-src/ocr_cli/
+src/docr/
 ├── cli.py              # Click CLI
 ├── core/
 │   ├── config.py       # AgentConfig dataclass

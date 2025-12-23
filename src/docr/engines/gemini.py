@@ -10,9 +10,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from ocr_cli.core.config import GeminiConfig
-from ocr_cli.core.result import FigureResult, PageResult
-from ocr_cli.engines.base import BaseEngine, EngineCapabilities
+from docr.core.config import GeminiConfig
+from docr.core.result import FigureResult, PageResult
+from docr.engines.base import BaseEngine, EngineCapabilities
 
 
 class GeminiEngine(BaseEngine):

@@ -1,14 +1,14 @@
-"""Minimal console interface for OCR CLI."""
+"""Minimal console interface for docr."""
 
 from rich.console import Console
 from rich.text import Text
 
-from ocr_cli import __version__
-from ocr_cli.ui.theme import AGENT_THEME, ENGINE_LABELS, STATUS_ICONS
+from docr import __version__
+from docr.ui.theme import AGENT_THEME, ENGINE_LABELS, STATUS_ICONS
 
 
 class AgentConsole:
-    """Minimal terminal interface for the OCR CLI."""
+    """Minimal terminal interface for the docr."""
 
     def __init__(self, verbose: bool = False):
         self.console = Console(theme=AGENT_THEME)

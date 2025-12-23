@@ -1,4 +1,4 @@
-"""Minimal theme for OCR CLI terminal UI."""
+"""Minimal theme for docr terminal UI."""
 
 from rich.style import Style
 from rich.theme import Theme
