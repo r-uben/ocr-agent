@@ -171,15 +171,16 @@ class DeepSeekEngine(BaseEngine):
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=60,
+                    timeout=120,  # Increased from 60s for complex figures
                 )
 
                 if result.returncode != 0:
+                    error_msg = result.stderr.strip() if result.stderr else "Unknown error"
                     return FigureResult(
                         figure_num=0,
                         page_num=0,
                         figure_type=figure_type,
-                        description=f"Error: {result.stderr}",
+                        description=f"Error: {error_msg}",
                     )
 
                 # Read output
@@ -192,6 +193,10 @@ class DeepSeekEngine(BaseEngine):
                         parts = description.split("---", 2)
                         if len(parts) >= 3:
                             description = parts[2].strip()
+
+                    # Skip if description is too short or meaningless
+                    if not description or len(description) < 10:
+                        description = "Unable to generate meaningful description"
                 else:
                     description = "No description generated"
 
@@ -210,10 +215,17 @@ class DeepSeekEngine(BaseEngine):
                     engine=self.name,
                 )
 
+            except subprocess.TimeoutExpired:
+                return FigureResult(
+                    figure_num=0,
+                    page_num=0,
+                    figure_type=figure_type,
+                    description="Error: Figure processing timed out (>120s)",
+                )
             except Exception as e:
                 return FigureResult(
                     figure_num=0,
                     page_num=0,
                     figure_type=figure_type,
-                    description=f"Error: {e}",
+                    description=f"Error: {type(e).__name__}: {e}",
                 )
