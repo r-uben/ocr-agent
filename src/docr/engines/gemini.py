@@ -1,10 +1,11 @@
 """Gemini OCR engine adapter.
 
-Gemini Flash is a cloud-based multimodal model with excellent OCR capabilities.
-Cost: ~$0.0002 per page (very cheap).
+Uses the gemini-ocr-cli tool for cloud OCR processing via Google Gemini.
+CLI: https://github.com/r-uben/gemini-ocr-cli
 """
 
-import io
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -16,38 +17,13 @@ from docr.engines.base import BaseEngine, EngineCapabilities
 
 
 class GeminiEngine(BaseEngine):
-    """Adapter for Google Gemini API."""
+    """Adapter for Google Gemini API via CLI tool."""
 
     COST_PER_PAGE = 0.0002  # ~$0.0002 per page (Flash is very cheap)
-
-    OCR_PROMPT = """Extract all text from this document image with high accuracy.
-Preserve the original formatting and structure:
-- Maintain paragraph breaks and spacing
-- Keep heading hierarchy (use markdown # headers)
-- Format tables as proper markdown tables
-- Preserve lists (bulleted and numbered)
-- Include footnotes, references, and citations
-- Maintain any special formatting (bold, italic)
-
-Output clean, well-structured markdown. Be thorough and accurate."""
-
-    FIGURE_PROMPT = """Analyze this figure in detail and provide:
-
-1. **Type**: What kind of visualization is this? (bar chart, line graph, pie chart,
-   scatter plot, table, diagram, flowchart, photograph, etc.)
-
-2. **Description**: What does this figure show or represent?
-
-3. **Key findings**: What are the main data points, trends, or conclusions?
-
-4. **Details**: List any labels, axes, legends, annotations, or notable features.
-
-Be specific and quantitative. Extract any numbers, percentages, or values visible."""
 
     def __init__(self, config: GeminiConfig | None = None) -> None:
         super().__init__()
         self.config = config or GeminiConfig()
-        self._client = None
 
     @property
     def name(self) -> str:
@@ -67,7 +43,7 @@ Be specific and quantitative. Extract any numbers, percentages, or values visibl
         )
 
     def initialize(self) -> bool:
-        """Initialize Gemini client."""
+        """Check if gemini-ocr CLI is available."""
         if self._initialized:
             return True
 
@@ -75,63 +51,90 @@ Be specific and quantitative. Extract any numbers, percentages, or values visibl
             return False
 
         try:
-            from google import genai
-
-            self._client = genai.Client(api_key=self.config.api_key)
-            self._initialized = True
-            return True
-
-        except ImportError:
+            # Check if CLI is installed
+            result = subprocess.run(
+                ["gemini-ocr", "info"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={"GEMINI_API_KEY": self.config.api_key},
+            )
+            self._initialized = result.returncode == 0
+            return self._initialized
+        except (subprocess.SubprocessError, FileNotFoundError):
             return False
-        except Exception:
-            return False
-
-    def _pil_to_part(self, image: Image.Image):
-        """Convert PIL Image to Gemini Part."""
-        from google.genai import types
-
-        buffer = io.BytesIO()
-        image.save(buffer, format="JPEG", quality=95)
-        return types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
-
-    def _call_gemini(self, image: Image.Image, prompt: str) -> str:
-        """Call Gemini API with image."""
-        if not self._client:
-            raise RuntimeError("Client not initialized")
-
-        from google.genai import types
-
-        response = self._client.models.generate_content(
-            model=self.config.model,
-            contents=[prompt, self._pil_to_part(image)],
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=8192,
-            ),
-        )
-
-        return response.text.strip() if response.text else ""
 
     def process_image(self, image: Image.Image, page_num: int = 1) -> PageResult:
-        """Process a single image with Gemini."""
+        """Process a single image with Gemini CLI."""
         if not self._initialized and not self.initialize():
-            return self._create_error_result(page_num, "Gemini not initialized (check API key)")
+            return self._create_error_result(page_num, "Gemini CLI not installed (check API key)")
 
         start_time = time.time()
 
-        try:
-            text = self._call_gemini(image, self.OCR_PROMPT)
-            processing_time = time.time() - start_time
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
 
-            return self._create_success_result(
-                page_num=page_num,
-                text=text,
-                processing_time=processing_time,
-                cost=self.COST_PER_PAGE,
-            )
+            # Save image
+            image_file = tmp_path / "input.png"
+            image.save(image_file, format="PNG")
 
-        except Exception as e:
-            return self._create_error_result(page_num, str(e))
+            # Run CLI
+            try:
+                cmd = [
+                    "gemini-ocr",
+                    "process",
+                    str(image_file),
+                    "-o", str(tmp_path),
+                    "--api-key", self.config.api_key,
+                    "--model", self.config.model,
+                    "--no-timestamp",  # Don't add timestamp to output folder
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.config.timeout,
+                )
+
+                if result.returncode != 0:
+                    return self._create_error_result(
+                        page_num,
+                        f"Gemini CLI failed: {result.stderr}"
+                    )
+
+                # Read output markdown
+                output_file = tmp_path / "input.md"
+                if not output_file.exists():
+                    return self._create_error_result(
+                        page_num,
+                        "Gemini CLI did not generate output file"
+                    )
+
+                text = output_file.read_text()
+
+                # Remove metadata frontmatter if present
+                if text.startswith("---"):
+                    parts = text.split("---", 2)
+                    if len(parts) >= 3:
+                        text = parts[2].strip()
+
+                processing_time = time.time() - start_time
+
+                return self._create_success_result(
+                    page_num=page_num,
+                    text=text,
+                    processing_time=processing_time,
+                    cost=self.COST_PER_PAGE,
+                )
+
+            except subprocess.TimeoutExpired:
+                return self._create_error_result(
+                    page_num,
+                    f"Gemini CLI timeout after {self.config.timeout}s"
+                )
+            except Exception as e:
+                return self._create_error_result(page_num, str(e))
 
     def describe_figure(
         self,
@@ -139,52 +142,84 @@ Be specific and quantitative. Extract any numbers, percentages, or values visibl
         figure_type: str = "unknown",
         context: str = "",
     ) -> FigureResult:
-        """Describe a figure using Gemini vision."""
+        """Describe a figure using Gemini vision via CLI."""
         if not self._initialized and not self.initialize():
             return FigureResult(
                 figure_num=0,
                 page_num=0,
                 figure_type=figure_type,
-                description="Gemini not initialized",
+                description="Gemini CLI not installed",
             )
 
-        try:
-            prompt = self.FIGURE_PROMPT
-            if context:
-                prompt += f"\n\nContext from surrounding text:\n{context}"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
 
-            description = self._call_gemini(image, prompt)
+            # Save image
+            image_file = tmp_path / "figure.png"
+            image.save(image_file, format="PNG")
 
-            # Try to extract figure type from response
-            detected_type = figure_type
-            type_keywords = {
-                "bar chart": "bar_chart",
-                "line graph": "line_graph",
-                "pie chart": "pie_chart",
-                "scatter": "scatter_plot",
-                "table": "table",
-                "diagram": "diagram",
-                "flowchart": "flowchart",
-                "photograph": "photo",
-                "map": "map",
-            }
-            for keyword, t in type_keywords.items():
-                if keyword in description.lower():
-                    detected_type = t
-                    break
+            try:
+                cmd = [
+                    "gemini-ocr",
+                    "describe",
+                    str(image_file),
+                    "--api-key", self.config.api_key,
+                    "--model", self.config.model,
+                    "-o", str(tmp_path / "description.md"),
+                ]
 
-            return FigureResult(
-                figure_num=0,
-                page_num=0,
-                figure_type=detected_type,
-                description=description,
-                engine=self.name,
-            )
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
 
-        except Exception as e:
-            return FigureResult(
-                figure_num=0,
-                page_num=0,
-                figure_type=figure_type,
-                description=f"Error: {e}",
-            )
+                if result.returncode != 0:
+                    return FigureResult(
+                        figure_num=0,
+                        page_num=0,
+                        figure_type=figure_type,
+                        description=f"Error: {result.stderr}",
+                    )
+
+                # Read output
+                output_file = tmp_path / "description.md"
+                if output_file.exists():
+                    description = output_file.read_text().strip()
+                else:
+                    description = "No description generated"
+
+                # Try to extract figure type from response
+                detected_type = figure_type
+                type_keywords = {
+                    "bar chart": "bar_chart",
+                    "line graph": "line_graph",
+                    "pie chart": "pie_chart",
+                    "scatter": "scatter_plot",
+                    "table": "table",
+                    "diagram": "diagram",
+                    "flowchart": "flowchart",
+                    "photograph": "photo",
+                    "map": "map",
+                }
+                for keyword, t in type_keywords.items():
+                    if keyword in description.lower():
+                        detected_type = t
+                        break
+
+                return FigureResult(
+                    figure_num=0,
+                    page_num=0,
+                    figure_type=detected_type,
+                    description=description,
+                    engine=self.name,
+                )
+
+            except Exception as e:
+                return FigureResult(
+                    figure_num=0,
+                    page_num=0,
+                    figure_type=figure_type,
+                    description=f"Error: {e}",
+                )

@@ -36,11 +36,15 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.8.0",
 ]
+# OCR Engine CLIs - install individually or use 'all'
+deepseek = ["deepseek-ocr-cli>=0.1.0"]
 nougat = ["nougat-ocr>=0.1.17", "torch>=2.0.0"]
-gemini = ["google-genai>=1.0.0"]
-mistral = ["mistralai>=1.0.0"]
-cloud = ["google-genai>=1.0.0", "mistralai>=1.0.0"]
-all = ["nougat-ocr>=0.1.17", "torch>=2.0.0", "google-genai>=1.0.0", "mistralai>=1.0.0"]
+gemini = ["gemini-ocr-cli"]  # Install from git until published
+mistral = ["mistral-ocr-cli>=0.1.0"]
+# Convenience groups
+local = ["deepseek-ocr-cli>=0.1.0", "nougat-ocr>=0.1.17", "torch>=2.0.0"]
+cloud = ["gemini-ocr-cli", "mistral-ocr-cli>=0.1.0"]
+all = ["deepseek-ocr-cli>=0.1.0", "nougat-ocr>=0.1.17", "torch>=2.0.0", "gemini-ocr-cli", "mistral-ocr-cli>=0.1.0"]
 
 [project.scripts]
 docr = "docr.cli:main"

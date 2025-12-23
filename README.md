@@ -6,12 +6,13 @@ Process academic papers and documents using free local models first, with automa
 
 ## Features
 
-- **Multi-engine OCR** — Nougat, DeepSeek (Ollama), Mistral, Gemini
+- **Multi-engine OCR** — Nougat, DeepSeek, Mistral, Gemini (via dedicated CLI tools)
 - **Smart routing** — Free local engines first, cloud only when needed
 - **Quality audit** — Heuristics + LLM review catches garbage text
 - **Figure extraction** — Renders figures from PDFs, describes with vision models
 - **Batch processing** — Process entire directories of papers
 - **CLI** — Live progress, colored panels, cost tracking
+- **Modular engines** — Each OCR backend is a standalone CLI tool
 
 ## Quick Start
 
@@ -254,27 +255,57 @@ See `examples/kuttner_2001/` for a complete example with all 3 figures.
 
 ## Requirements
 
-**Required:**
+**Base:**
 - Python 3.10+
-- [Ollama](https://ollama.ai) with models:
-  - `deepseek-ocr:latest` (primary OCR)
-  - `llama3.2` or `qwen2.5` (quality audit)
+- [Ollama](https://ollama.ai) with `llama3.2` or `qwen2.5` (for quality audit)
 
-**Optional (for cloud fallback):**
-- `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-- `MISTRAL_API_KEY`
+**OCR Engines** (install individually based on needs):
+
+| Engine | Installation | Type | Cost |
+|--------|-------------|------|------|
+| **DeepSeek** | `pip install deepseek-ocr-cli` | Local (Ollama) | Free |
+| **Nougat** | Included with docr | Local (Python) | Free |
+| **Gemini** | `pip install gemini-ocr-cli` | Cloud API | ~$0.0002/page |
+| **Mistral** | `pip install mistral-ocr-cli` | Cloud API | ~$0.001/page |
+
+**Installation examples:**
 
 ```bash
-# Install Ollama and pull models
-ollama pull deepseek-ocr:latest
+# Install with local engines only (recommended to start)
+pip install docr[local]
+
+# Install with all engines
+pip install docr[all]
+
+# Install specific engines
+pip install docr[deepseek,gemini]
+```
+
+**Setup:**
+
+```bash
+# 1. Install Ollama and pull audit model
 ollama pull llama3.2  # or qwen2.5
 
-# Optionally pull Nougat for academic papers
-# (requires nougat_ocr Python package)
+# 2. If using DeepSeek, pull its model
+ollama pull deepseek-ocr:latest
 
-# Check engine status
+# 3. If using cloud engines, set API keys
+export GEMINI_API_KEY="your-key"
+export MISTRAL_API_KEY="your-key"
+
+# 4. Check engine status
 docr engines
 ```
+
+## OCR Engine CLIs
+
+Each OCR backend is a standalone CLI tool that can be used independently:
+
+- **[deepseek-ocr-cli](https://github.com/r-uben/deepseek-ocr-cli)** - Local OCR via Ollama/DeepSeek
+- **[gemini-ocr-cli](https://github.com/r-uben/gemini-ocr-cli)** - Cloud OCR via Google Gemini
+- **[mistral-ocr-cli](https://github.com/r-uben/mistral-ocr-cli)** - Cloud OCR via Mistral AI
+- **[nougat-ocr](https://github.com/facebookresearch/nougat)** - Academic papers (used as Python library)
 
 ## CLI Commands
 
