@@ -80,6 +80,7 @@ class DeepSeekEngine(BaseEngine):
             try:
                 cmd = [
                     "deepseek-ocr",
+                    "process",
                     str(image_file),
                     "-o", str(tmp_path),
                     "--model", self.config.model,
@@ -160,6 +161,7 @@ class DeepSeekEngine(BaseEngine):
             try:
                 cmd = [
                     "deepseek-ocr",
+                    "process",
                     str(image_file),
                     "-o", str(tmp_path),
                     "--prompt", prompt,
