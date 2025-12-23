@@ -14,15 +14,25 @@ from docr.ui.theme import AGENT_THEME, ENGINE_LABELS
 console = Console(theme=AGENT_THEME)
 
 
-@click.group()
-@click.version_option(version=__version__, prog_name="ocr-agent")
-def cli() -> None:
+@click.group(invoke_without_command=True)
+@click.version_option(version=__version__, prog_name="docr")
+@click.argument("pdf_path", type=click.Path(exists=True, path_type=Path), required=False)
+@click.option("--save-figures", is_flag=True, help="Save figure images to disk")
+@click.pass_context
+def cli(ctx: click.Context, pdf_path: Path | None, save_figures: bool) -> None:
     """docr - Multi-Engine Document Processing.
 
     A multi-agent OCR system that uses cascading fallback
     between local and cloud engines for optimal quality and cost.
+
+    Usage:
+        docr paper.pdf                    # Simple usage
+        docr paper.pdf --save-figures     # Save figures
+        docr process paper.pdf [OPTIONS]  # Full options
     """
-    pass
+    if ctx.invoked_subcommand is None and pdf_path is not None:
+        # Direct invocation: docr paper.pdf
+        ctx.invoke(process, pdf_path=pdf_path, save_figures=save_figures)
 
 
 @cli.command()
