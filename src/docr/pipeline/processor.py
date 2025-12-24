@@ -346,6 +346,9 @@ class OCRPipeline:
         min_area = 80 * 80
         render_dpi = 150
         min_drawings_for_vector_figure = 5  # Minimum drawings to consider as vector figure
+        min_vector_figure_area_ratio = 0.05  # Figure must be at least 5% of page area
+        max_vector_figure_area_ratio = 0.85  # Skip if covers almost entire page (likely background)
+        header_footer_margin = 0.1  # Ignore top/bottom 10% for small clusters
 
         # Prepare figures directory if saving is enabled
         figures_dir: Path | None = None
@@ -377,73 +380,109 @@ class OCRPipeline:
                     per_page = 0
                     processed_regions: set[tuple[int, int, int, int]] = set()
 
+                    # Detect if page is landscape (likely a presentation slide)
+                    is_landscape = page.rect.width > page.rect.height
+                    # Adjust thresholds for presentations (more permissive)
+                    effective_min_area_ratio = min_vector_figure_area_ratio * 0.5 if is_landscape else min_vector_figure_area_ratio
+                    effective_min_drawings = 3 if is_landscape else min_drawings_for_vector_figure
+
                     # Strategy 0: Detect vector figures (charts/plots made of drawings)
-                    # Many academic figures are vector graphics, not raster images
+                    # Works for academic papers AND presentations with vector graphics
                     try:
                         drawings = page.get_drawings()
-                        page_text = page.get_text()
+                        page_width = page.rect.width
+                        page_height = page.rect.height
+                        page_area = page_width * page_height
 
-                        # Check if page has enough drawings and mentions "Figure X"
-                        figure_match = re.search(r'Figure\s+(\d+)\.', page_text)
-                        if figure_match and len(drawings) >= min_drawings_for_vector_figure:
-                            # Compute bounding box of all drawings
-                            all_x0 = min(d['rect'].x0 for d in drawings)
-                            all_y0 = min(d['rect'].y0 for d in drawings)
-                            all_x1 = max(d['rect'].x1 for d in drawings)
-                            all_y1 = max(d['rect'].y1 for d in drawings)
+                        if len(drawings) >= effective_min_drawings:
+                            # Cluster drawings into figure regions using spatial proximity
+                            # Group drawings that are close together
+                            figure_regions = self._cluster_drawings_into_figures(
+                                drawings,
+                                page_width,
+                                page_height,
+                                cluster_gap=30,  # Max gap between drawings in same cluster
+                            )
 
-                            width = all_x1 - all_x0
-                            height = all_y1 - all_y0
-                            area = width * height
+                            for region_drawings, bbox in figure_regions:
+                                if figure_counter > self.config.figures_max_total:
+                                    break
+                                if per_page >= self.config.figures_max_per_page:
+                                    break
 
-                            # Only process if figure is reasonably sized
-                            if area >= min_area and width > 50 and height > 50:
-                                region_key = (int(all_x0), int(all_y0), int(all_x1), int(all_y1))
-                                if region_key not in processed_regions:
-                                    processed_regions.add(region_key)
+                                x0, y0, x1, y1 = bbox
+                                width = x1 - x0
+                                height = y1 - y0
+                                area = width * height
+                                area_ratio = area / page_area
 
-                                    # Add padding around the figure
-                                    padding = 10
-                                    clip = fitz.Rect(
-                                        max(0, all_x0 - padding),
-                                        max(0, all_y0 - padding),
-                                        min(page.rect.width, all_x1 + padding),
-                                        min(page.rect.height, all_y1 + padding)
+                                # Filter out unlikely figures
+                                if area < min_area:
+                                    continue
+                                if width < 50 or height < 50:
+                                    continue
+                                if area_ratio < effective_min_area_ratio:
+                                    continue  # Too small to be meaningful
+                                if area_ratio > max_vector_figure_area_ratio:
+                                    continue  # Likely page background/decoration
+                                if len(region_drawings) < effective_min_drawings:
+                                    continue  # Not enough drawings in this cluster
+
+                                # Skip header/footer areas for small clusters (not for presentations)
+                                if not is_landscape:
+                                    center_y = (y0 + y1) / 2
+                                    in_header = center_y < page_height * header_footer_margin
+                                    in_footer = center_y > page_height * (1 - header_footer_margin)
+                                    if (in_header or in_footer) and len(region_drawings) < 20:
+                                        continue  # Likely logo or page decoration
+
+                                region_key = (int(x0), int(y0), int(x1), int(y1))
+                                if region_key in processed_regions:
+                                    continue
+                                processed_regions.add(region_key)
+
+                                # Add padding around the figure
+                                padding = 10
+                                clip = fitz.Rect(
+                                    max(0, x0 - padding),
+                                    max(0, y0 - padding),
+                                    min(page_width, x1 + padding),
+                                    min(page_height, y1 + padding)
+                                )
+
+                                mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
+                                try:
+                                    pix = page.get_pixmap(matrix=mat, clip=clip)
+                                    pil_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+                                    if max(pil_img.size) > max_dim:
+                                        pil_img.thumbnail((max_dim, max_dim))
+
+                                    # Save figure image if enabled
+                                    fig_path: str | None = None
+                                    if figures_dir:
+                                        fig_filename = f"figure_{figure_counter}_page{page_num}.png"
+                                        fig_path = str(figures_dir / fig_filename)
+                                        pil_img.save(fig_path)
+
+                                    fig_result = figure_engine.describe_figure(pil_img, context=context_text or "")
+                                    fig_result.figure_num = figure_counter
+                                    fig_result.page_num = page_num
+                                    if fig_path:
+                                        fig_result.image_path = fig_path
+
+                                    page_result.figures.append(fig_result)
+                                    self.console.print_figure_result(
+                                        figure_num=fig_result.figure_num,
+                                        page=page_num,
+                                        fig_type=fig_result.figure_type,
+                                        description=fig_result.description,
                                     )
 
-                                    mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
-                                    try:
-                                        pix = page.get_pixmap(matrix=mat, clip=clip)
-                                        pil_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
-                                        if max(pil_img.size) > max_dim:
-                                            pil_img.thumbnail((max_dim, max_dim))
-
-                                        # Save figure image if enabled
-                                        fig_path: str | None = None
-                                        if figures_dir:
-                                            fig_filename = f"figure_{figure_counter}_page{page_num}.png"
-                                            fig_path = str(figures_dir / fig_filename)
-                                            pil_img.save(fig_path)
-
-                                        fig_result = figure_engine.describe_figure(pil_img, context=context_text or "")
-                                        fig_result.figure_num = figure_counter
-                                        fig_result.page_num = page_num
-                                        if fig_path:
-                                            fig_result.image_path = fig_path
-
-                                        page_result.figures.append(fig_result)
-                                        self.console.print_figure_result(
-                                            figure_num=fig_result.figure_num,
-                                            page=page_num,
-                                            fig_type=fig_result.figure_type,
-                                            description=fig_result.description,
-                                        )
-
-                                        figure_counter += 1
-                                        per_page += 1
-                                    except Exception:
-                                        pass  # Fall through to other strategies
+                                    figure_counter += 1
+                                    per_page += 1
+                                except Exception:
+                                    pass  # Fall through to other strategies
                     except Exception:
                         pass  # Fall through to other strategies
 
@@ -592,6 +631,109 @@ class OCRPipeline:
         except Exception as e:
             self.console.print_warning(f"Could not open/process PDF for figures: {e}")
             return
+
+    def _cluster_drawings_into_figures(
+        self,
+        drawings: list[dict],
+        page_width: float,
+        page_height: float,
+        cluster_gap: float = 30,
+    ) -> list[tuple[list[dict], tuple[float, float, float, float]]]:
+        """Cluster drawings into figure regions using spatial proximity.
+
+        Uses a simple union-find approach: drawings whose bounding boxes are within
+        `cluster_gap` pixels of each other belong to the same figure.
+
+        Returns:
+            List of (drawings_in_cluster, bounding_box) tuples.
+        """
+        if not drawings:
+            return []
+
+        # Extract bounding boxes
+        boxes = []
+        for d in drawings:
+            rect = d.get("rect")
+            if rect:
+                boxes.append((rect.x0, rect.y0, rect.x1, rect.y1))
+            else:
+                boxes.append(None)
+
+        # Filter out drawings without valid boxes
+        valid = [(i, boxes[i]) for i in range(len(boxes)) if boxes[i] is not None]
+        if not valid:
+            return []
+
+        # Union-Find structure
+        parent = {i: i for i, _ in valid}
+
+        def find(x: int) -> int:
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+
+        def union(x: int, y: int) -> None:
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+
+        # Check proximity between all pairs (O(n^2) but n is typically small)
+        for i, (idx_i, box_i) in enumerate(valid):
+            for j, (idx_j, box_j) in enumerate(valid):
+                if i >= j:
+                    continue
+                # Compute gap between boxes
+                x0_i, y0_i, x1_i, y1_i = box_i
+                x0_j, y0_j, x1_j, y1_j = box_j
+
+                # Horizontal gap
+                if x1_i < x0_j:
+                    h_gap = x0_j - x1_i
+                elif x1_j < x0_i:
+                    h_gap = x0_i - x1_j
+                else:
+                    h_gap = 0  # Overlapping horizontally
+
+                # Vertical gap
+                if y1_i < y0_j:
+                    v_gap = y0_j - y1_i
+                elif y1_j < y0_i:
+                    v_gap = y0_i - y1_j
+                else:
+                    v_gap = 0  # Overlapping vertically
+
+                # If close enough, merge clusters
+                if h_gap <= cluster_gap and v_gap <= cluster_gap:
+                    union(idx_i, idx_j)
+
+        # Group drawings by cluster
+        clusters: dict[int, list[int]] = {}
+        for idx, _ in valid:
+            root = find(idx)
+            if root not in clusters:
+                clusters[root] = []
+            clusters[root].append(idx)
+
+        # Compute bounding box for each cluster
+        results = []
+        for indices in clusters.values():
+            cluster_drawings = [drawings[i] for i in indices]
+            cluster_boxes = [boxes[i] for i in indices if boxes[i] is not None]
+
+            if not cluster_boxes:
+                continue
+
+            x0 = min(b[0] for b in cluster_boxes)
+            y0 = min(b[1] for b in cluster_boxes)
+            x1 = max(b[2] for b in cluster_boxes)
+            y1 = max(b[3] for b in cluster_boxes)
+
+            results.append((cluster_drawings, (x0, y0, x1, y1)))
+
+        # Sort by position (top-to-bottom, left-to-right)
+        results.sort(key=lambda r: (r[1][1], r[1][0]))
+
+        return results
 
     def save_output(self, result: OCRResult, output_path: Path | None = None) -> Path:
         """Save OCR result to file."""
