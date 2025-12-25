@@ -10,6 +10,7 @@ Process academic papers and documents using free local models first, with automa
 - **Smart routing** — Free local engines first, cloud only when needed
 - **Quality audit** — Heuristics + LLM review catches garbage text
 - **Figure extraction** — Renders figures from PDFs, describes with vision models
+- **Parallel processing** — Process multiple pages/figures concurrently
 - **Batch processing** — Process entire directories of papers
 - **CLI** — Live progress, colored panels, cost tracking
 - **Modular engines** — Each OCR backend is a standalone CLI tool
@@ -333,17 +334,66 @@ docr process paper.pdf [OPTIONS]
   --no-audit             Skip quality audit
   --no-figures           Skip figure processing
   --save-figures         Save figure images to disk
+  --timeout SECONDS      Timeout per page/figure (default: 300)
+  --workers N            Parallel workers (default: 4, use 1 for sequential)
 
 # Batch process directory
 docr batch ~/Papers/ [OPTIONS]
   --limit N              Process first N files
   --save-figures         Save all figure images
+  --timeout SECONDS      Timeout per page/figure (default: 300)
+  --workers N            Parallel workers (default: 4)
 
 # Check engines
 docr engines
 
 # Check audit system
 docr audit-status
+```
+
+## Parallel Processing
+
+docr can process multiple pages and figures in parallel to speed up large documents:
+
+```bash
+# Fast processing with 8 parallel workers (recommended for M3 Pro/Max with 32GB+ RAM)
+docr paper.pdf --workers 8
+
+# Conservative processing for limited RAM
+docr paper.pdf --workers 2
+
+# Sequential processing (most reliable, slowest)
+docr paper.pdf --workers 1
+
+# Extended timeout for very complex pages (10 min per page)
+docr paper.pdf --timeout 600
+```
+
+**Hardware recommendations:**
+
+| RAM | Workers | Notes |
+|-----|---------|-------|
+| 8GB | 1-2 | Sequential or minimal parallelism |
+| 16GB | 2-4 | Good for most documents |
+| 32GB | 4-6 | Fast processing |
+| 64GB+ | 6-8 | Maximum parallelism |
+
+Parallel processing uses ThreadPoolExecutor for concurrent page/figure processing. Each worker loads the page image into memory, so higher worker counts require more RAM.
+
+**Timeout configuration:**
+
+The default 300s (5 min) timeout works for most pages. For documents with complex figures or slow API responses, increase the timeout:
+
+```yaml
+# docr.yaml
+parallel_pages: 4
+parallel_figures: 2
+figure_timeout: 600  # 10 min per figure
+
+nougat:
+  timeout: 600
+deepseek:
+  timeout: 600
 ```
 
 ## Configuration
@@ -366,10 +416,25 @@ include_figures: true
 save_figures: false
 figures_max_total: 25
 figures_max_per_page: 3
+figure_timeout: 180  # seconds per figure description
+
+# Parallel processing (adjust based on your hardware)
+parallel_pages: 4    # pages processed concurrently
+parallel_figures: 2  # figures described concurrently
 
 # Output
 output_dir: output
 output_format: markdown
+
+# Engine-specific timeouts (seconds)
+nougat:
+  timeout: 300
+deepseek:
+  timeout: 300
+gemini:
+  timeout: 300
+mistral:
+  timeout: 300
 ```
 
 ## Architecture

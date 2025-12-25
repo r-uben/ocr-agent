@@ -74,6 +74,18 @@ def cli(ctx: click.Context, pdf_path: Path | None, save_figures: bool) -> None:
     help="Save extracted figure images to output/<doc>/figures/",
 )
 @click.option(
+    "--timeout",
+    type=int,
+    default=300,
+    help="Timeout per page/figure in seconds (default: 300)",
+)
+@click.option(
+    "--workers",
+    type=int,
+    default=4,
+    help="Parallel workers for page/figure processing (default: 4, use 1 for sequential)",
+)
+@click.option(
     "-v", "--verbose",
     is_flag=True,
     help="Enable verbose output",
@@ -87,6 +99,8 @@ def process(
     no_audit: bool,
     no_figures: bool,
     save_figures: bool,
+    timeout: int,
+    workers: int,
     verbose: bool,
 ) -> None:
     """Process a PDF document with multi-agent OCR.
@@ -102,8 +116,17 @@ def process(
         output_format=format,
         include_figures=not no_figures,
         save_figures=save_figures,
+        parallel_pages=workers,
+        parallel_figures=max(1, workers // 2),  # Fewer parallel figure workers (API calls)
         verbose=verbose,
     )
+
+    # Apply timeout to all engine configs
+    config.nougat.timeout = timeout
+    config.deepseek.timeout = timeout
+    config.mistral.timeout = timeout
+    config.gemini.timeout = timeout
+    config.figure_timeout = timeout
 
     if no_audit:
         config.audit.enabled = False
@@ -166,6 +189,18 @@ def process(
     help="Save extracted figure images",
 )
 @click.option(
+    "--timeout",
+    type=int,
+    default=300,
+    help="Timeout per page/figure in seconds (default: 300)",
+)
+@click.option(
+    "--workers",
+    type=int,
+    default=4,
+    help="Parallel workers for page/figure processing (default: 4)",
+)
+@click.option(
     "--limit",
     type=int,
     help="Maximum number of PDFs to process",
@@ -178,6 +213,8 @@ def batch(
     no_audit: bool,
     no_figures: bool,
     save_figures: bool,
+    timeout: int,
+    workers: int,
     limit: int | None,
 ) -> None:
     """Process all PDFs in a directory.
@@ -200,7 +237,17 @@ def batch(
         output_format=format,
         include_figures=not no_figures,
         save_figures=save_figures,
+        parallel_pages=workers,
+        parallel_figures=max(1, workers // 2),
     )
+
+    # Apply timeout to all engine configs
+    config.nougat.timeout = timeout
+    config.deepseek.timeout = timeout
+    config.mistral.timeout = timeout
+    config.gemini.timeout = timeout
+    config.figure_timeout = timeout
+
     if output_dir:
         config.output_dir = output_dir
     if no_audit:

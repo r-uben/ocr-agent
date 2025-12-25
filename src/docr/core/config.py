@@ -30,7 +30,7 @@ class EngineConfig:
     enabled: bool = True
     priority: int = 0  # Lower is higher priority
     max_retries: int = 2
-    timeout: int = 120  # seconds
+    timeout: int = 300  # seconds (5 min default - increase for large docs)
 
 
 @dataclass
@@ -111,7 +111,9 @@ class AgentConfig:
     figures_max_total: int = 25  # Hard cap across document
     figures_max_per_page: int = 3  # Hard cap per page
     figures_context_max_chars: int = 1200  # Truncate page text context for vision calls
-    parallel_pages: int = 1  # Number of pages to process in parallel
+    figure_timeout: int = 180  # seconds per figure description (3 min default)
+    parallel_pages: int = 4  # Number of pages to process in parallel (set to 1 for sequential)
+    parallel_figures: int = 2  # Number of figures to describe in parallel
     verbose: bool = False
 
     # Routing overrides (set via CLI/config to force choices)
@@ -186,7 +188,9 @@ class AgentConfig:
             "figures_max_total",
             "figures_max_per_page",
             "figures_context_max_chars",
+            "figure_timeout",
             "parallel_pages",
+            "parallel_figures",
             "verbose",
             "use_primary_override",
             "use_fallback_override",

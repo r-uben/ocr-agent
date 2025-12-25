@@ -1,6 +1,7 @@
 """Main OCR pipeline orchestrator."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -136,13 +137,15 @@ class OCRPipeline:
         document: Document,
         engine_type: EngineType,
     ) -> list[PageResult]:
-        """Run primary OCR stage."""
+        """Run primary OCR stage with optional parallelization."""
         self.console.print_stage_header(1, "PRIMARY OCR", "Extract text from pages")
 
         engine = self.engines[engine_type]
-        self.console.print_engine_active(engine.name, "processing...")
+        workers = self.config.parallel_pages
+        parallel_msg = f"processing... ({workers} workers)" if workers > 1 else "processing..."
+        self.console.print_engine_active(engine.name, parallel_msg)
 
-        results = []
+        results: list[PageResult] = []
 
         with self.progress.stage_progress(
             stage_name="primary",
@@ -150,18 +153,44 @@ class OCRPipeline:
             total=document.num_pages,
             description="Extracting text",
         ) as ctx:
-            for page in document.pages:
-                result = engine.process_image(page.image, page.page_num)
-                results.append(result)
+            if workers <= 1:
+                # Sequential processing
+                for page in document.pages:
+                    result = engine.process_image(page.image, page.page_num)
+                    results.append(result)
 
-                status = "success" if result.status == PageStatus.SUCCESS else "error"
-                ctx.add_result(
-                    item=page.page_num,
-                    status=status,
-                    message=result.error_message if result.error_message else "",
-                    confidence=result.confidence,
-                )
-                ctx.advance()
+                    status = "success" if result.status == PageStatus.SUCCESS else "error"
+                    ctx.add_result(
+                        item=page.page_num,
+                        status=status,
+                        message=result.error_message if result.error_message else "",
+                        confidence=result.confidence,
+                    )
+                    ctx.advance()
+            else:
+                # Parallel processing
+                page_results: dict[int, PageResult] = {}
+
+                def process_page(page):
+                    return page.page_num, engine.process_image(page.image, page.page_num)
+
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(process_page, page): page for page in document.pages}
+                    for future in as_completed(futures):
+                        page_num, result = future.result()
+                        page_results[page_num] = result
+
+                        status = "success" if result.status == PageStatus.SUCCESS else "error"
+                        ctx.add_result(
+                            item=page_num,
+                            status=status,
+                            message=result.error_message if result.error_message else "",
+                            confidence=result.confidence,
+                        )
+                        ctx.advance()
+
+                # Sort by page number to maintain order
+                results = [page_results[i] for i in sorted(page_results.keys())]
 
             ctx.print_results()
 
@@ -264,7 +293,7 @@ class OCRPipeline:
         pages_to_reprocess: list[int],
         primary_engine: EngineType,
     ) -> list[PageResult]:
-        """Run fallback OCR on failed pages."""
+        """Run fallback OCR on failed pages with optional parallelization."""
         self.console.print_stage_header(3, "FALLBACK OCR", "Reprocess failed pages")
 
         # Select fallback engine (different from primary)
@@ -277,9 +306,11 @@ class OCRPipeline:
             return []
         engine = self.engines[fallback_engine]
 
-        self.console.print_engine_active(engine.name, f"reprocessing {len(pages_to_reprocess)} pages")
+        workers = self.config.parallel_pages
+        parallel_msg = f"reprocessing {len(pages_to_reprocess)} pages ({workers} workers)" if workers > 1 else f"reprocessing {len(pages_to_reprocess)} pages"
+        self.console.print_engine_active(engine.name, parallel_msg)
 
-        results = []
+        results: list[PageResult] = []
 
         with self.progress.stage_progress(
             stage_name="fallback",
@@ -287,22 +318,54 @@ class OCRPipeline:
             total=len(pages_to_reprocess),
             description="Reprocessing",
         ) as ctx:
-            for page_num in pages_to_reprocess:
-                page = document.get_page(page_num)
-                if not page:
-                    continue
+            if workers <= 1:
+                # Sequential processing
+                for page_num in pages_to_reprocess:
+                    page = document.get_page(page_num)
+                    if not page:
+                        continue
 
-                result = engine.process_image(page.image, page_num)
-                results.append(result)
+                    result = engine.process_image(page.image, page_num)
+                    results.append(result)
 
-                status = "success" if result.status == PageStatus.SUCCESS else "error"
-                ctx.add_result(
-                    item=page_num,
-                    status=status,
-                    message=result.error_message if result.error_message else "",
-                    confidence=result.confidence,
-                )
-                ctx.advance()
+                    status = "success" if result.status == PageStatus.SUCCESS else "error"
+                    ctx.add_result(
+                        item=page_num,
+                        status=status,
+                        message=result.error_message if result.error_message else "",
+                        confidence=result.confidence,
+                    )
+                    ctx.advance()
+            else:
+                # Parallel processing
+                page_results: dict[int, PageResult] = {}
+
+                def process_page(page_num: int):
+                    page = document.get_page(page_num)
+                    if not page:
+                        return None
+                    return page_num, engine.process_image(page.image, page_num)
+
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(process_page, pn): pn for pn in pages_to_reprocess}
+                    for future in as_completed(futures):
+                        result_tuple = future.result()
+                        if result_tuple is None:
+                            continue
+                        page_num, result = result_tuple
+                        page_results[page_num] = result
+
+                        status = "success" if result.status == PageStatus.SUCCESS else "error"
+                        ctx.add_result(
+                            item=page_num,
+                            status=status,
+                            message=result.error_message if result.error_message else "",
+                            confidence=result.confidence,
+                        )
+                        ctx.advance()
+
+                # Sort by page number to maintain order
+                results = [page_results[i] for i in sorted(page_results.keys())]
 
             ctx.print_results()
 
@@ -313,7 +376,7 @@ class OCRPipeline:
         return results
 
     def _run_stage4(self, document: Document, result: OCRResult) -> None:
-        """Run figure detection and description stage."""
+        """Run figure detection and description stage with optional parallelization."""
         self.console.print_stage_header(4, "FIGURE PROCESSING", "Describe figures and charts")
         self.console.print_warning("Figure processing is experimental; extracting images from PDF.")
 
@@ -331,33 +394,35 @@ class OCRPipeline:
             self.console.print_warning("No figure-capable engine available")
             return
 
-        self.console.print_engine_active(figure_engine.name, "describing figures")
+        workers = self.config.parallel_figures
+        parallel_msg = f"extracting and describing figures ({workers} workers)" if workers > 1 else "describing figures"
+        self.console.print_engine_active(figure_engine.name, parallel_msg)
 
         try:
             import fitz  # PyMuPDF
-            import re
             from PIL import Image
         except ImportError:
             self.console.print_warning("Figure detection skipped (PyMuPDF/Pillow not available)")
             return
 
+        # Phase 1: Extract all figures first (fast, no API calls)
+        pending_figures: list[tuple[int, int, Image.Image, str, str | None]] = []  # (fig_num, page_num, image, context, fig_path)
+
         figure_counter = 1
         max_dim = 1024
         min_area = 80 * 80
         render_dpi = 150
-        min_drawings_for_vector_figure = 5  # Minimum drawings to consider as vector figure
-        min_vector_figure_area_ratio = 0.05  # Figure must be at least 5% of page area
-        max_vector_figure_area_ratio = 0.85  # Skip if covers almost entire page (likely background)
-        header_footer_margin = 0.1  # Ignore top/bottom 10% for small clusters
+        min_drawings_for_vector_figure = 5
+        min_vector_figure_area_ratio = 0.05
+        max_vector_figure_area_ratio = 0.85
+        header_footer_margin = 0.1
 
         # Prepare figures directory if saving is enabled
         figures_dir: Path | None = None
         if self.config.save_figures:
             if self._custom_output_path:
-                # Save figures alongside custom output file
                 figures_dir = self._custom_output_path.parent / "figures"
             else:
-                # Default: save to output_dir/doc_stem/figures
                 doc_stem = Path(document.path).stem
                 figures_dir = self.config.output_dir / doc_stem / "figures"
             figures_dir.mkdir(parents=True, exist_ok=True)
@@ -374,21 +439,17 @@ class OCRPipeline:
                     if not page_result:
                         continue
 
-                    # Truncate context to avoid huge prompts.
                     context_text = (page_result.text or "")[: self.config.figures_context_max_chars]
 
                     per_page = 0
                     processed_regions: set[tuple[int, int, int, int]] = set()
 
-                    # Detect if page is landscape (likely a presentation slide)
                     is_landscape = page.rect.width > page.rect.height
-                    # Adjust thresholds for presentations (more permissive)
                     effective_min_area_ratio = min_vector_figure_area_ratio * 0.5 if is_landscape else min_vector_figure_area_ratio
-                    effective_max_area_ratio = 0.98 if is_landscape else max_vector_figure_area_ratio  # Presentations have large charts
+                    effective_max_area_ratio = 0.98 if is_landscape else max_vector_figure_area_ratio
                     effective_min_drawings = 3 if is_landscape else min_drawings_for_vector_figure
 
-                    # Strategy 0: Detect vector figures (charts/plots made of drawings)
-                    # Works for academic papers AND presentations with vector graphics
+                    # Strategy 0: Detect vector figures
                     try:
                         drawings = page.get_drawings()
                         page_width = page.rect.width
@@ -396,13 +457,8 @@ class OCRPipeline:
                         page_area = page_width * page_height
 
                         if len(drawings) >= effective_min_drawings:
-                            # Cluster drawings into figure regions using spatial proximity
-                            # Group drawings that are close together
                             figure_regions = self._cluster_drawings_into_figures(
-                                drawings,
-                                page_width,
-                                page_height,
-                                cluster_gap=30,  # Max gap between drawings in same cluster
+                                drawings, page_width, page_height, cluster_gap=30,
                             )
 
                             for region_drawings, bbox in figure_regions:
@@ -417,134 +473,85 @@ class OCRPipeline:
                                 area = width * height
                                 area_ratio = area / page_area
 
-                                # Filter out unlikely figures
-                                if area < min_area:
+                                if area < min_area or width < 50 or height < 50:
                                     continue
-                                if width < 50 or height < 50:
+                                if area_ratio < effective_min_area_ratio or area_ratio > effective_max_area_ratio:
                                     continue
-                                if area_ratio < effective_min_area_ratio:
-                                    continue  # Too small to be meaningful
-                                if area_ratio > effective_max_area_ratio:
-                                    continue  # Likely page background/decoration
                                 if len(region_drawings) < effective_min_drawings:
-                                    continue  # Not enough drawings in this cluster
+                                    continue
 
-                                # Skip header/footer areas for small clusters (not for presentations)
                                 if not is_landscape:
                                     center_y = (y0 + y1) / 2
                                     in_header = center_y < page_height * header_footer_margin
                                     in_footer = center_y > page_height * (1 - header_footer_margin)
                                     if (in_header or in_footer) and len(region_drawings) < 20:
-                                        continue  # Likely logo or page decoration
+                                        continue
 
                                 region_key = (int(x0), int(y0), int(x1), int(y1))
                                 if region_key in processed_regions:
                                     continue
                                 processed_regions.add(region_key)
 
-                                # Add padding around the figure
                                 padding = 10
                                 clip = fitz.Rect(
-                                    max(0, x0 - padding),
-                                    max(0, y0 - padding),
-                                    min(page_width, x1 + padding),
-                                    min(page_height, y1 + padding)
+                                    max(0, x0 - padding), max(0, y0 - padding),
+                                    min(page_width, x1 + padding), min(page_height, y1 + padding)
                                 )
 
                                 mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
                                 try:
                                     pix = page.get_pixmap(matrix=mat, clip=clip)
                                     pil_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
                                     if max(pil_img.size) > max_dim:
                                         pil_img.thumbnail((max_dim, max_dim))
 
-                                    # Save figure image if enabled
                                     fig_path: str | None = None
                                     if figures_dir:
                                         fig_filename = f"figure_{figure_counter}_page{page_num}.png"
                                         fig_path = str(figures_dir / fig_filename)
                                         pil_img.save(fig_path)
 
-                                    fig_result = figure_engine.describe_figure(pil_img, context=context_text or "")
-                                    fig_result.figure_num = figure_counter
-                                    fig_result.page_num = page_num
-                                    if fig_path:
-                                        fig_result.image_path = fig_path
-
-                                    page_result.figures.append(fig_result)
-                                    self.console.print_figure_result(
-                                        figure_num=fig_result.figure_num,
-                                        page=page_num,
-                                        fig_type=fig_result.figure_type,
-                                        description=fig_result.description,
-                                    )
-
+                                    pending_figures.append((figure_counter, page_num, pil_img, context_text or "", fig_path))
                                     figure_counter += 1
                                     per_page += 1
                                 except Exception:
-                                    pass  # Fall through to other strategies
+                                    pass
 
-                            # Fallback for presentations: if drawings exist but weren't extracted
-                            # (e.g., they cover the whole page), render the content area
+                            # Fallback for presentations
                             if is_landscape and per_page == 0 and len(drawings) >= 10:
-                                # Render center 80% of page (exclude header/footer margins)
                                 margin_x = page_width * 0.05
-                                margin_top = page_height * 0.15  # Title area
-                                margin_bottom = page_height * 0.10  # Footer area
-                                clip = fitz.Rect(
-                                    margin_x,
-                                    margin_top,
-                                    page_width - margin_x,
-                                    page_height - margin_bottom
-                                )
+                                margin_top = page_height * 0.15
+                                margin_bottom = page_height * 0.10
+                                clip = fitz.Rect(margin_x, margin_top, page_width - margin_x, page_height - margin_bottom)
 
                                 mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
                                 try:
                                     pix = page.get_pixmap(matrix=mat, clip=clip)
                                     pil_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
                                     if max(pil_img.size) > max_dim:
                                         pil_img.thumbnail((max_dim, max_dim))
 
-                                    # Save figure image if enabled
                                     fig_path: str | None = None
                                     if figures_dir:
                                         fig_filename = f"figure_{figure_counter}_page{page_num}.png"
                                         fig_path = str(figures_dir / fig_filename)
                                         pil_img.save(fig_path)
 
-                                    fig_result = figure_engine.describe_figure(pil_img, context=context_text or "")
-                                    fig_result.figure_num = figure_counter
-                                    fig_result.page_num = page_num
-                                    if fig_path:
-                                        fig_result.image_path = fig_path
-
-                                    page_result.figures.append(fig_result)
-                                    self.console.print_figure_result(
-                                        figure_num=fig_result.figure_num,
-                                        page=page_num,
-                                        fig_type=fig_result.figure_type,
-                                        description=fig_result.description,
-                                    )
-
+                                    pending_figures.append((figure_counter, page_num, pil_img, context_text or "", fig_path))
                                     figure_counter += 1
                                     per_page += 1
                                 except Exception:
                                     pass
                     except Exception:
-                        pass  # Fall through to other strategies
+                        pass
 
-                    # Strategy 1: Extract IMAGE blocks from page structure (vector graphics, composites)
-                    # These have bounding boxes and need to be rendered from the page.
+                    # Strategy 1: Extract IMAGE blocks
                     try:
                         text_dict = page.get_text("dict")
                         for block in text_dict.get("blocks", []):
-                            if figure_counter > self.config.figures_max_total:
+                            if figure_counter > self.config.figures_max_total or per_page >= self.config.figures_max_per_page:
                                 break
-                            if per_page >= self.config.figures_max_per_page:
-                                break
-                            if block.get("type") != 1:  # 1 = image block
+                            if block.get("type") != 1:
                                 continue
 
                             bbox = block.get("bbox")
@@ -552,23 +559,18 @@ class OCRPipeline:
                                 continue
 
                             x0, y0, x1, y1 = bbox
-                            width = x1 - x0
-                            height = y1 - y0
+                            width, height = x1 - x0, y1 - y0
                             area = width * height
                             aspect = width / max(height, 1)
 
-                            if area < min_area:
-                                continue
-                            if aspect > 8 or aspect < 0.125:
+                            if area < min_area or aspect > 8 or aspect < 0.125:
                                 continue
 
-                            # Round bbox to avoid duplicates from floating-point differences
                             region_key = (int(x0), int(y0), int(x1), int(y1))
                             if region_key in processed_regions:
                                 continue
                             processed_regions.add(region_key)
 
-                            # Render the region at higher DPI
                             clip = fitz.Rect(bbox)
                             mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
                             try:
@@ -580,66 +582,45 @@ class OCRPipeline:
                             if max(pil_img.size) > max_dim:
                                 pil_img.thumbnail((max_dim, max_dim))
 
-                            # Save figure image if enabled
                             fig_path: str | None = None
                             if figures_dir:
                                 fig_filename = f"figure_{figure_counter}_page{page_num}.png"
                                 fig_path = str(figures_dir / fig_filename)
                                 pil_img.save(fig_path)
 
-                            fig_result = figure_engine.describe_figure(pil_img, context=context_text or "")
-                            fig_result.figure_num = figure_counter
-                            fig_result.page_num = page_num
-                            if fig_path:
-                                fig_result.image_path = fig_path
-
-                            page_result.figures.append(fig_result)
-                            self.console.print_figure_result(
-                                figure_num=fig_result.figure_num,
-                                page=page_num,
-                                fig_type=fig_result.figure_type,
-                                description=fig_result.description,
-                            )
-
+                            pending_figures.append((figure_counter, page_num, pil_img, context_text or "", fig_path))
                             figure_counter += 1
                             per_page += 1
                     except Exception:
-                        pass  # Fall through to strategy 2
+                        pass
 
-                    # Strategy 2: Extract raw embedded images (raster images with valid colorspace)
+                    # Strategy 2: Extract raw embedded images
                     images = page.get_images(full=True)
                     for img in images:
-                        if figure_counter > self.config.figures_max_total:
-                            break
-                        if per_page >= self.config.figures_max_per_page:
+                        if figure_counter > self.config.figures_max_total or per_page >= self.config.figures_max_per_page:
                             break
 
                         xref = img[0]
                         width, height = img[2], img[3]
                         area = width * height
                         aspect = width / max(height, 1)
-                        if area < min_area:
-                            continue
-                        if aspect > 8 or aspect < 0.125:
+                        if area < min_area or aspect > 8 or aspect < 0.125:
                             continue
 
-                        # Skip very small images (likely logos/icons, not figures)
                         try:
                             raw_image = pdf.extract_image(xref)
-                            if len(raw_image.get("image", b"")) < 5000:  # < 5KB
+                            if len(raw_image.get("image", b"")) < 5000:
                                 continue
                         except Exception:
-                            pass  # Continue if we can't check size
+                            pass
 
                         pix = None
                         rgb = None
                         try:
                             pix = fitz.Pixmap(pdf, xref)
-                            # Skip images without a colorspace (masks handled by strategy 1)
                             if pix.colorspace is None:
                                 continue
 
-                            # Ensure RGB without alpha for PIL.
                             if pix.colorspace != fitz.csRGB or pix.alpha or pix.n != 3:
                                 rgb = fitz.Pixmap(fitz.csRGB, pix)
                                 pix = rgb
@@ -654,32 +635,75 @@ class OCRPipeline:
                         if max(pil_img.size) > max_dim:
                             pil_img.thumbnail((max_dim, max_dim))
 
-                        # Save figure image if enabled
-                        fig_path = None
+                        fig_path: str | None = None
                         if figures_dir:
                             fig_filename = f"figure_{figure_counter}_page{page_num}.png"
                             fig_path = str(figures_dir / fig_filename)
                             pil_img.save(fig_path)
 
-                        fig_result = figure_engine.describe_figure(pil_img, context=context_text or "")
-                        fig_result.figure_num = figure_counter
-                        fig_result.page_num = page_num
-                        if fig_path:
-                            fig_result.image_path = fig_path
-
-                        page_result.figures.append(fig_result)
-                        self.console.print_figure_result(
-                            figure_num=fig_result.figure_num,
-                            page=page_num,
-                            fig_type=fig_result.figure_type,
-                            description=fig_result.description,
-                        )
-
+                        pending_figures.append((figure_counter, page_num, pil_img, context_text or "", fig_path))
                         figure_counter += 1
                         per_page += 1
+
         except Exception as e:
             self.console.print_warning(f"Could not open/process PDF for figures: {e}")
             return
+
+        if not pending_figures:
+            self.console.console.print("[dim]No figures detected[/dim]")
+            return
+
+        self.console.console.print(f"[dim]Extracted {len(pending_figures)} figures, describing...[/dim]")
+
+        # Phase 2: Describe figures (parallelized)
+        def describe_figure_task(fig_data: tuple[int, int, Image.Image, str, str | None]):
+            fig_num, page_num, pil_img, context, fig_path = fig_data
+            fig_result = figure_engine.describe_figure(pil_img, context=context)
+            fig_result.figure_num = fig_num
+            fig_result.page_num = page_num
+            if fig_path:
+                fig_result.image_path = fig_path
+            return fig_result
+
+        if workers <= 1:
+            # Sequential description
+            for fig_data in pending_figures:
+                fig_result = describe_figure_task(fig_data)
+                page_result = result.get_page(fig_result.page_num)
+                if page_result:
+                    page_result.figures.append(fig_result)
+                self.console.print_figure_result(
+                    figure_num=fig_result.figure_num,
+                    page=fig_result.page_num,
+                    fig_type=fig_result.figure_type,
+                    description=fig_result.description,
+                )
+        else:
+            # Parallel description
+            described_figures: list[tuple[int, any]] = []  # (fig_num, fig_result)
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(describe_figure_task, fig_data): fig_data[0] for fig_data in pending_figures}
+                for future in as_completed(futures):
+                    try:
+                        fig_result = future.result()
+                        described_figures.append((fig_result.figure_num, fig_result))
+
+                        self.console.print_figure_result(
+                            figure_num=fig_result.figure_num,
+                            page=fig_result.page_num,
+                            fig_type=fig_result.figure_type,
+                            description=fig_result.description,
+                        )
+                    except Exception as e:
+                        fig_num = futures[future]
+                        self.console.print_warning(f"Figure {fig_num} description failed: {e}")
+
+            # Sort by figure number and attach to page results
+            for _, fig_result in sorted(described_figures, key=lambda x: x[0]):
+                page_result = result.get_page(fig_result.page_num)
+                if page_result:
+                    page_result.figures.append(fig_result)
 
     def _cluster_drawings_into_figures(
         self,
